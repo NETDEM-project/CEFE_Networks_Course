@@ -1,0 +1,698 @@
+---
+title: 'CEFE Social Networks Course: Session 1'
+author: "Matthew Silk"
+date: "2023-03-27"
+output: 
+  html_document:
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+First, a quick explanation. I don't work very often with the Tidyverse. Also, network analysis tends to involve using matrices, arrays and (sometimes) lists as much as it does dataframes so Tidyverse operations would normally be useful mainly at later stages of the analysis. If anyone is keen to adapt some or any of the code here to be Tidyverse friendly then let me know! That would be very helpful.
+
+## SESSION 1: PART 3
+
+### Set up R environment
+
+First we need to load the R packages we will use. You may need to install these if you haven't used them before using the `install.packages()` command in R
+
+```{r packages, warning=FALSE,message=FALSE}
+
+set.seed(1)
+
+library(igraph)
+library(asnipe)
+library(viridis)
+library(HyperG)
+
+```
+***
+
+### Manipulating network data
+
+We are going to start with the network introduced in the presentation that consists of 8 nodes and the interactions between them.
+
+We will first write it as an edge list.
+
+```{r write_network}
+
+el1<-data.frame(ID1=c(1,1,1,2,3,3,5,5,6,7),ID2=c(2,3,6,4,4,5,6,7,7,8))
+
+el1
+
+```
+
+You can check this edge list against the powerpoint slides to make sure it is the same if you like.
+
+Frequently, it is helpful to be able to convert between different ways of storing network data. For example, we might want to convert our edge list to an adjacency matrix.
+
+There are various ways you could do this, but here is an easy one
+
+```{r convert_edgelist}
+
+#We first work out the number of nodes in our network
+net_size<-length(unique(c(el1$ID1,el1$ID2)))
+
+#We create a matrix of the right size
+adj1<-matrix(0,nr=net_size,nc=net_size)
+
+adj1[as.matrix(el1)]<-adj1[cbind(el1[,2],el1[,1])]<-1
+
+adj1
+
+```
+
+Again, it is easy to compare the matrix we produce here with the one in the pwerpoint slides.
+
+The final format that can be useful for representing social data is the incidence matrix or group-by-individual matrix.
+
+Again, it is easy to convert from the edge list to an incidence matrix.
+
+```{r convert_edgelist 2}
+
+#We now need to also know the number of interactions
+int_size<-nrow(el1)
+
+#Create incidence matrix with the number of rows being the number of interactions and number of columns the number of nodes
+inc1<-matrix(0,nr=int_size,nc=net_size)
+
+#We can then fill the incidence matrix based on the information in the edge list
+for(i in 1:int_size){
+  inc1[i,unlist(el1[i,])]<-1
+}
+
+inc1
+
+```
+
+Feel free to compare this with the incidence matrix in the powerpoint slides.
+
+Now it is time to test your skills by trying to convert:
+1) an adjacency matriceto an edge list
+and
+2) an incidence matrix to an adjacency matrix
+
+You can see an example of each by unhiding the code chunk below.
+
+```{r class.source = "fold-hide"}
+
+#Create new edge list
+el2<-which(adj1==1,arr.ind=TRUE)
+el2<-el2[el2[,1]<el2[,2],]
+names(el2)<-c("ID1","ID2")
+
+
+#Create new adjacency matrix
+adj2<-crossprod(inc1)
+diag(adj2)<-0
+
+```
+
+
+***
+
+### Introducing igraph
+
+To conduct network analyses in R though, it is normally useful to use particular packages such as [igraph](https://r.igraph.org/), [sna](https://cran.r-project.org/web/packages/sna/sna.pdf) or [network](https://cran.r-project.org/web/packages/network/network.pdf) (among many, many others!). Some of these packages can work directly with edge lists or adjacency matrices, while others require networks to be converted into new objects
+
+Especially in this introductory session we will focus mainly on using igraph as it is the most flexible tool for basic social network analyses. We can convert networks in these different forms into *igraph objects*.
+
+```{r igraph_conversion}
+
+##Create an igraph object from an adjacency matrix
+#Note that we create an "undirected" and "unweighted" network here - these options will come up later
+net1<-igraph::graph_from_adjacency_matrix(adj1,mode="undirected",weighted=NULL)
+
+#Create an igraph object from an edgelist
+#There are two potential options (note we again create an undirected network from each)
+#graph_from_edgelist requires a matrix
+net2<-igraph::graph_from_edgelist(as.matrix(el1),directed=FALSE)
+#graph_from_data_frame can work directly with the dataframe we use to store our edge list.
+net2a<-igraph::graph_from_data_frame(el1,directed=FALSE)
+
+##Create an igraph object from an incidence matrix
+#This doesn't do quite what we might expect, which we will come back to later
+net3<-igraph::graph_from_incidence_matrix(inc1,directed=FALSE,weighted=NULL)
+
+```
+
+So what does an igraph object look like?
+
+Let's look at the networks we've created.
+
+```{r igraph_objects}
+
+net1
+
+net2
+
+net3
+
+```
+
+Here we see that the summary of the igraph object is mainly a modified version of the edge list (edges listed as 1--2 1--3 etc.) with some additional information about the number of nodes and edges in the network as well as additional "attributes".
+
+We can also see that our `net3` object is different from the other two (look at how there is a new attribute called **type** and more edges in the network). This is because igraph automatically creates a **bipartite network** from incidence matrices rather than a normal undirected social network. Therefore, it is important to be careful when converting bipartite networks to igraph objects - it may be better to use them to create edge lists or adjacency matrices first.
+
+***
+
+### Navigating igraph objects
+
+There are some useful functions that can help a huge amount when using igraph, we will work through some of them now using our existing toy network.
+
+```{r igraph_basics}
+
+#We can extract basic information about the nodes in our network using the following code
+V(net1)
+
+#Note that nodes can have attributes. For example, we could add attributes sex and size as follows
+V(net1)$sex<-sample(c("M","F"),net_size,replace=TRUE)
+V(net1)$bodysize<-round(runif(net_size,10,20))
+
+#We can look at the node attributes of our network using the following code
+vertex_attr(net1)
+
+#We can use similar code for the edges
+#This code produces the edgelist
+E(net1)
+
+#We can assign an edge attribute as follows
+E(net1)$kin<-sample(c("K","NK"),int_size,replace=TRUE)
+
+#And look at edge attributes like this
+edge_attr(net1)
+
+#If we've forgotten the size of our network (either the number of nodes or edges) then we can also use inbuilt functions in igraph
+
+#Number of nodes
+gorder(net1)
+
+#Number of edges
+gsize(net1)
+
+```
+
+It is also helpful to know how to turn igraph objects into adjacency matrices and edge lists for further analyses. You can do that like this:
+
+```{r igraph_out}
+
+adj_out<-as_adjacency_matrix(net1,sparse=FALSE)
+
+el_out<-as_edgelist(net1)
+colnames(el_out)<-c("ID1","ID2")
+
+```
+
+This covers a range of useful basic functions in igraph that are useful and also VERY easy to forget (trust me...). The next stage is to move on to how to use igraph to visualise networks.
+
+***
+
+### Plotting networks with igraph
+
+igraph provides excellent (and pretty flexible) plotting features for networks in R. We are going to run through some of the key features here, but can't cover everything here. For those of you who are keen ggplot users you can also check out [ggnet2](https://briatte.github.io/ggnet/).
+
+In this section we will demonstrate the basics of plotting networks including making changes to nodes and edges, as well as network layouts.
+
+Plotting a network with igraph is incredibly easy, you can just use plot on an igraph object
+The full function is `igraph::plot.igraph()`.
+
+```{r igraph_plotting1}
+
+plot(net1)
+
+```
+
+But you will see that the object we plot doesn't look that great - we want more control over the features of the network plotted. We will run through these here.
+
+Fist we might want to control features of the nodes, which we demonstrate in the next code chunk.
+
+```{r igraph_plotting2}
+
+#You can change the node labels with vertex.label=
+plot(net1,vertex.label=LETTERS[1:net_size])
+
+#Adding vertex.label=NA will suppress the node labels
+plot(net1,vertex.label=NA)
+
+#You can change the node size with vertex.size
+plot(net1,vertex.label=NA,vertex.size=20)
+
+#And this can be a vector to allow nodes to vary in size (here by our node attribute)
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize)
+
+#We change change node colour like this
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color="blue")
+
+#And node colour can also be a vector (here we colour the nodes by their sex)
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"))
+
+#We can also change the node shape in a similar way.
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"),vertex.shape=ifelse(V(net1)$sex=="M","circle","square"))
+
+```
+
+This gives quite a lot of flexibility already in terms of making the network look nicer. But we can also adjust the plotting of the edges.
+
+```{r igraph_plotting3}
+
+#We can change edge size and colour in much the same way
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"),edge.width=5,edge.color="lightgray")
+
+#And we can alaso choose to make edges curved. This can look nice but can also be really helpful to avoid edges going behind other nodes in more intricate networks
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"),edge.width=5,edge.color="lightgray",edge.curved=0.7)
+
+```
+
+A final key part of the basics is to be able to vary the layour of our networks - this can be really useful with more complicated networks
+
+```{r igraph_plotting4}
+
+#The default is already quite smart - it chooses what it thinks will be the best layour for your network
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"),edge.width=5,edge.color="lightgray",layout=layout.auto)
+
+#But, we may want to choose our own
+#For example, a circle layout
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"),edge.width=5,edge.color="lightgray",layout=layout_in_circle)
+
+#Or on a grid
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"),edge.width=5,edge.color="lightgray",layout=layout_on_grid)
+
+#You can also provide igraph your own layout.
+#This can be helpful when maintaining a consistent layout between plots or if your individuals are associated with particular locations, for example
+
+coords<-cbind(runif(net_size,0,1),runif(net_size,0,1))
+
+plot(net1,vertex.label=NA,vertex.size=V(net1)$bodysize,vertex.color=ifelse(V(net1)$sex=="M","red","blue"),edge.width=5,edge.color="lightgray",layout=coords)
+
+```
+
+There are lots of different layouts which you can find more information on [here](https://igraph.org/r/doc/layout_.html).
+
+And one final note is that its possible to add all sorts of other features to your network plots in R such as titles, text, legends etc. in much the same way you would do with other plots, maybe take some time to give it a go.
+
+***
+***
+
+To test your skills take the adjacency matrix `full_adj` and the associated trait data in `ind_data` found in the course materials and try to reproduce the plot shown below.
+
+```{r echo=FALSE,cache=TRUE}
+
+network<-igraph::sample_islands(islands.n=10,islands.size=10,islands.pin=0.8,n.inter=1)
+full_adj<-igraph::as_adjacency_matrix(network,sparse=FALSE)
+
+ind_data<-data.frame(1:100)
+ind_data$group<-rep(1:10,each=10)
+ind_data$sex<-sample(c("M","F"),100,replace=TRUE)
+ind_data$weight<-rnorm(100,50,5)
+ind_data$offspring<-rpois(100,6)
+
+V(network)$size<-5+ind_data$offspring
+V(network)$sex<-ind_data$sex
+V(network)$group<-ind_data$group
+
+cols<-viridis(10)
+
+plot(network,vertex.label=NA,vertex.shape=ifelse(V(network)$sex=="M","square","circle"),vertex.color=cols[V(network)$group],edge.width=2,edge.color="bisque3")
+
+saveRDS(full_adj,"full_adj.RDS")
+saveRDS(ind_data,"ind_data.RDS")
+
+```
+
+If you get stuck then you can look at the code below to help out.
+
+```{r eval=FALSE, class.source = "fold-hide"}
+
+network<-igraph::graph_from_adjacency_matrix(full_adj,mode="undirected",weighted=NULL)
+
+V(network)$size<-5+ind_data$offspring
+V(network)$sex<-ind_data$sex
+V(network)$group<-ind_data$group
+
+cols<-viridis(10)
+
+plot(network,vertex.label=NA,vertex.shape=ifelse(V(network)$sex=="M","square","circle"),vertex.color=cols[V(network)$group],edge.width=2,edge.color="bisque3")
+
+```
+
+We will now head back to the powerpoint to continue. If you have finished early then please feel free to continue to try ways to plots networks using igraph.
+
+***
+***
+***
+
+## SESSION 1: PART 4
+
+### Simple theoretical models of networks
+
+Following on from the powerpoint slides we will now use `igraph` to explore basic theoretical models of the networks. Below I reproduce the code shown in the presentation (note that the networks may look a little different)
+
+***
+
+First we have the erdos-renyi random graph which only requires either a probability of an edge `type="gnp"` or a number of edges `type="gnm"`. Try playing with these options to see how the structure of the network is affected.
+
+```{r erdos_renyi}
+
+network<-igraph::erdos.renyi.game(n=50,type="gnp",p.or.m=0.08,directed=FALSE,loops=FALSE)
+plot(network,vertex.label=NA,vertex.size=10,vertex.color="black",edge.width=2)
+
+```
+
+***
+
+Another common type of network that would perhaps be relevant to territorial animals, for example, is the lattice network. It is simple to a lattice network using igraph (including in >3 dimensions if you are feeling brave).
+
+```{r lattice}
+
+network2<-igraph::make_lattice(length=7,dim=2,directed=FALSE)
+plot(network2,vertex.label=NA,vertex.size=10,vertex.color="black",edge.width=2)
+
+```
+
+***
+
+The small-world generative model builds on the idea of a lattice network, but allows occasional long-distance connections. It is a good null model for network structure in many spatially-structured animal societies. By changing the code see if you can work out what the `nei` and `p` arguments do in particular. If you are stuck you can use `?sample_smallworld`to learn more about the function.
+
+```{r small_world}
+
+network3<-igraph::sample_smallworld(dim=1,size=50,nei=2,p=0.05,loops=FALSE,multiple=FALSE)
+plot(network3,vertex.label=NA,vertex.size=10,vertex.color="black",edge.width=2)
+
+```
+
+***
+
+The Barabasi-Albert model is an example of a model which allows individuals to vary in how connected they are (i.e. some individuals have lots of connections and others not many at all). In this model individuals prefer to connect to the most connected individuals. Try playing with the `pow` argument to see what networks look like with different levels of preferential attachment.
+
+```{r preferential}
+
+network4<-igraph::sample_pa(n=50,power=1.5,m=5,directed=FALSE)
+plot(network4,vertex.label=NA,vertex.size=10,vertex.color="black",edge.width=2)
+
+```
+
+***
+
+One of the most important features of many animal societies are social groups. It is also possible to simulate network structures with groups (in network language we call  these *modules* or *communities*), with one example provided below. 
+
+```{r modular}
+
+network5<-igraph::sample_islands(islands.n=5,islands.size=10,islands.pin=0.8,n.inter=1)
+plot(network5,vertex.label=NA,vertex.size=10,vertex.color="black",edge.width=2)
+
+```
+
+This is just a taster of basic generative models of networks in R, you can find more examples in the full list of igraph functions [here](https://igraph.org/r/html/latest/) - search for game in the list to find most of them.
+
+***
+***
+
+## SESSION 1: PART 5
+
+Now see if you can use the models shown here and others to generate and plot networks for the types of animal society described in the powerpoint slide.
+
+
+***
+***
+***
+
+## SESSION 1: PART 6
+
+All of our examples so far have been for simple networks in which edges either exist or not. The aim of the next section is to expand what we have learned to the more complex types of network structures introduced in the last set of powerpoint slides.
+
+### Weighted networks
+
+The most frequently used additional information in animal social networks are weighted networks. We will explore various aspects of weighted networks, and handling and plotting them with igraph here.
+
+First the basics of handling a weighted network
+
+```{r weighted1}
+
+#We can start with an edgelist as before
+el_w<-el1
+el_w$weight<-1+rpois(int_size,1)
+#we are just adding edge weights from a Poisson draw to a new column
+
+el_w
+
+#To create an adjacency matrix from the edgelist is now a little trickier
+adj_w<-matrix(0,nr=net_size,nc=net_size)
+
+for(i in 1:int_size){
+  adj_w[el_w[i,1],el_w[i,2]]<-adj_w[el_w[i,2],el_w[i,1]]<-el_w[i,3]
+}
+
+adj_w
+
+```
+
+Note that for an incidence matrix we would need either:
+* an extra vector indicating the duration of each event
+* each edge to be represented with multiple rows depending on how many times that interaction was recorded.
+
+If you are feeling confident try playing with these different approaches.
+
+You can also create weighted networks using a binary incidence matrix. For example the R package [asnipe](https://cran.r-project.org/web/packages/asnipe/asnipe.pdf) does this for group-by-individual matrices.
+
+By default asnipe creates weighted networks using the *simple ratio index* (see powerpoint slides).
+
+```{r weighted2,message=FALSE}
+
+asnipe_adj<-get_network(inc1)
+
+asnipe_adj
+
+```
+
+It is then easy to create an igraph object for a weighted network, either from an adjacency matrix or edgelist
+
+```{r weighted3}
+
+net_w<-graph_from_adjacency_matrix(adj_w,mode="undirected",weighted=TRUE)
+
+#From edgelist
+net_w2<-graph_from_edgelist(as.matrix(el_w[,1:2]),directed=FALSE)
+E(net_w2)$weight<-el_w[,3]
+
+```
+
+We can then plot the weighted network using the skills we learned before, but using the edge attribute weight with the `edge.width` argument.
+
+```{r weighted4}
+
+plot(net_w,vertex.label=NA,vertex.color="black",edge.color="lightgray",edge.width=E(net_w)$weight)
+
+```
+
+Note that for some weighted networks you may have to adjust the edge weights before plotting, try this with the `asnipe_adj` object above.
+
+***
+
+### Multigraphs
+
+In some ways multigraphs can work much the same way as weighted networks.
+
+For adjacency matrices, you can store an unweighted multigraph in much the same way as you would store a weighted network. In fact, *igraph* will automatically assume adjacency matrices with whole number edges are multigraphs if you don't specify that the network is weighted.
+
+```{r multigraph1}
+
+net_mg<-graph_from_adjacency_matrix(adj_w,mode="undirected")
+
+plot(net_mg,vertex.label=NA,vertex.color="black",edge.color="lightgray")
+
+```
+
+However, this becomes a problem when you have a weighted multigraph (i.e. each edge in the multigraph can have a weight). In these cases edgelists are the best way to store the information for a multigraph.
+
+In edgelist form it is better to have each interaction listed on its own row.
+
+For example, if we decided our weighted network `el_w` above is better represented as a multigraph we should change its format.
+
+```{r multigraph2}
+
+#Create version of the network with each interaction listed as a separate edge
+el_mg<-el_w[rep(1:nrow(el_w),el_w[,3]),1:2]
+
+#We can then create the network as before
+net_mg<-graph_from_edgelist(as.matrix(el_mg),directed=FALSE)
+plot(net_mg,vertex.label=NA,vertex.color="black",edge.color="lightgray")
+
+```
+
+We can then add separate weights to each edge
+
+```{r multigraph3}
+
+el_mg$weight<-1+rpois(nrow(el_mg),1)
+
+#We can then create the network as before
+net_mg<-graph_from_edgelist(as.matrix(el_mg[,1:2]),directed=FALSE)
+E(net_mg)$weight<-el_mg$weight
+plot(net_mg,vertex.label=NA,vertex.color="black",edge.color="lightgray",edge.width=E(net_mg)$weight)
+
+```
+
+So we can now work with weighted multigraphs if we like
+
+***
+
+### Ego networks
+
+It is easy to work with ego networks in much the same way you would do otherwise in terms of data handling. In *igraph* it is easy to extract the ego network for any node in your network, which may be useful and so its demonstrated here.
+
+```{r ego}
+
+#Note that the function stores the ego networks as a list to keep just one we need to save the element of the list we want
+ego1<-make_ego_graph(net_mg,order=1,nodes='1')[[1]]
+
+#You can then plot ego networks just like you would others
+plot(ego1,vertex.label.color="white",vertex.color="black",edge.color="lightgray",edge.width=E(net_mg)$weight)
+
+```
+
+Try playing around to construct ego networks for different nodes, or perhaps a multipanel plot with different ego networks.
+
+***
+
+### Multilayer networks
+
+Working with multilayer networks is more difficult and so we are going to skip it for now. Many of the same rules apply in terms of moving between adjacency matrices and edgelists though. In terms of working specifically with multilayer network objects two good places to start are the R packages [muxViz](https://manlius.github.io/muxViz/) and [multinet](https://cran.r-project.org/web/packages/multinet/multinet.pdf).
+
+***
+
+### Bipartite networks
+
+Bipartite networks are stored as incidence matrices (remember `inc1` above?). As long as you create an igraph from an incidence matrix it will automatically be saved as a bipartite network
+
+Here, because we are using `inc1` from above, our bipartite network links individuals to groups or interactions.
+
+You can plot bipartite networks as normal in igraph, but they also have their own special format you can use where the different types of node are layed out in separate rows. Each of these formats can have advantages and disadvantages.
+
+```{r bipartite}
+
+#Create a bipartite network
+net_bp<-igraph::graph_from_incidence_matrix(inc1,directed=FALSE,weighted=NULL)
+
+#We can plot bipartite networks as normal
+plot(net_bp,vertex.label=NA,vertex.color=ifelse(V(net_bp)$type==TRUE,"black","salmon3"),vertex.shape=ifelse(V(net_bp)$type==TRUE,"circle","square"),edge.color="lightgray")
+
+#Or use the bipartite layout
+plot(net_bp,vertex.label=NA,vertex.color=ifelse(V(net_bp)$type==TRUE,"black","salmon3"),vertex.shape=ifelse(V(net_bp)$type==TRUE,"circle","square"),edge.color="lightgray",layout=layout.bipartite)
+
+```
+
+Note that edges can only connect between the different types of node as explained earlier.
+
+***
+
+### Hypergraphs
+
+Hypergraphs (and other higher-order approaches) also have fewer accessible tools available, and be warned that they are diifciult to plot nicely once you move beyond there being a few hyperedges! But here is a quick introduction to the main R package for hypergraphs.
+
+The package we use here is [HyperG](https://cran.r-project.org/web/packages/HyperG/HyperG.pdf)
+
+```{r hyper}
+
+#We first create the incidence matrix for the hypergraph
+#Each row is a separate group
+inters<-matrix(NA,nr=8,nc=10)
+inters[1,]<-c(1,1,0,0,0,0,0,0,0,0)
+inters[2,]<-c(0,0,1,1,1,0,0,0,0,0)
+inters[3,]<-c(0,0,0,0,0,1,1,1,1,1)
+inters[4,]<-c(1,0,1,0,0,0,0,0,0,0)
+inters[5,]<-c(0,1,0,1,0,0,0,0,0,0)
+inters[6,]<-c(0,0,0,0,1,1,0,0,0,0)
+inters[7,]<-c(0,0,0,0,0,0,1,1,0,0)
+inters[8,]<-c(0,0,0,0,0,0,0,0,1,1)
+
+#Create hypergraph object using HyperG
+hy_net<-hypergraph_from_incidence_matrix(inters)
+
+#Plot hypergraph obkect using HyperG - note that this package borrows a lot of plotting functionality from igraph
+set.seed(1)
+plot(hy_net,vertex.label=NA,vertex.color="gray20",mark.col=adjustcolor("gray40",0.1),mark.border="gray40")
+
+```
+
+Try comparing what you have plotted with the incidence matrix, or add node labels to help out.
+
+***
+***
+***
+
+### Dynamic networks
+
+As highlighted in the presentation, working with dynamic networks is frequently about making decisions about how best to present or analyse temporal changes in the network. You can potentially simply working with the raw edgelist or convert your network into a series of temporal "snapshots" or "aggregations".
+
+The best decisions to make here will depend on your research question, the biology of the species you are studying and any constraints on when or how the data were collected. As an exercise, try working with the edgelist `el_dyn` and deciding different ways that you could treat the network dynamics.
+
+```{r create_el, echo=FALSE, cache=TRUE}
+
+inds<-seq(1,100,1)
+groups<-rep(1:10,each=10)
+
+days<-seq(1,50,1)
+
+el_dyn<-matrix(NA,nr=length(days)*40,nc=4)
+
+for(i in 1:nrow(el_dyn)){
+  el_dyn[i,1]<-sample(inds,1)
+  t_inds<-inds[-el_dyn[i,1]]
+  t_groups<-groups[-el_dyn[i,1]]
+  t_groups2<-t_groups%in%groups[el_dyn[i,1]]
+  if(ceiling(i/50)<26){
+    el_dyn[i,2]<-sample(t_inds,1,prob=0.01+t_groups2)
+  }
+  if(ceiling(i/50)>25){
+    el_dyn[i,2]<-sample(t_inds,1)
+  }
+  el_dyn[i,3]<-1+rpois(1,1)
+  el_dyn[i,4]<-ceiling(i/50)
+}
+
+colnames(el_dyn)<-c("ID1","ID2","weight","date")
+
+saveRDS(el_dyn,"el_dyn.RDS")
+
+```
+
+The dataset consists of dyadic interactions (you could treat these as directed or undirected) over the course of 50 days of sampling. Each interaction has a strength or duration associated with it.
+
+See if you can find the network dynamics that occur in the dataset.
+
+If you get stuck you can look at the code below to help out.
+
+```{r class.source = "fold-hide", eval=FALSE}
+
+#We can make networks for different parts of the study such as the first half and the second half
+t1<-el_dyn[el_dyn[,4]<26,]
+t2<-el_dyn[el_dyn[,4]>25,]
+
+nett1<-graph_from_edgelist(t1[,1:2],directed=FALSE)
+nett2<-graph_from_edgelist(t2[,1:2],directed=FALSE)
+
+#This is some useful code that converts igraph objects between multigraphs and weighted graphs
+nett1<-simplify(nett1, edge.attr.comb=list(weight="sum"))
+nett2<-simplify(nett2, edge.attr.comb=list(weight="sum"))
+
+#If we plot these networks then (even excluding information on edge weights) we can see that the network has modules
+#or communities in the first part of the study but not in the second.
+plot(nett1,vertex.color="black",vertex.label.color="white",edge.color="lightgray")
+plot(nett2,vertex.color="black",vertex.label.color="white",edge.color="lightgray")
+
+```
+
+And that is all for the end of the first session - hopefully you are now feeling more confident understanding the different ways to represent social network data, how to handle social network datasets in R and how to generate some nice network plots.
+
+Next session we will start exploring social network analysis properly.
+
+***
+***
+***
+
+
+
+
