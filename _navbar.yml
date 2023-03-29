@@ -1,0 +1,17 @@
+name: "CEFEsna"
+title: "CEFE Social Networks Course"
+type: inverse
+left:
+  - text: "Sessions"
+    menu:
+       - text: "Session 1"
+         href: ./Session1/CEFE_networks_Session1.html
+       - text: "Session 2"
+         href: ./Session2/CEFE_networks_Session2.html
+       - text: "Session 3"
+         href: ./Session3/CEFE_networks_Session3.html
+       - text: "Session 4"
+         href: ./Session4/CEFE_networks_Session4.html
+right:
+  - icon: fa-github fa-lg
+    href: https://github.com/NETDEM-project/CEFEsna
