@@ -8,7 +8,7 @@ Dates and times are as follows:
 
 03/04/2023 13h – Session 1 - What is a network?
 
-07/04/2023 13h - Session 2 - How do we describe network structures?
+06/04/2023 13h - Session 2 - How do we describe network structures?
 
 13/04/2023 9h30 - Session 3 - How do we test hypotheses in networks?
 
