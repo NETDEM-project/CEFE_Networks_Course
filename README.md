@@ -1,4 +1,4 @@
-# CEFE_Networks_Course
+# CEFE Networks Course
 
 This GitHub contains materials for April 2023 CEFE social networks course.
 
