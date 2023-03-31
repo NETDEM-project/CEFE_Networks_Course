@@ -675,7 +675,9 @@ nett1<-graph_from_edgelist(t1[,1:2],directed=FALSE)
 nett2<-graph_from_edgelist(t2[,1:2],directed=FALSE)
 
 #This is some useful code that converts igraph objects between multigraphs and weighted graphs
+E(nett1)$weight<-1
 nett1<-simplify(nett1, edge.attr.comb=list(weight="sum"))
+E(nett2)$weight<-1
 nett2<-simplify(nett2, edge.attr.comb=list(weight="sum"))
 
 #If we plot these networks then (even excluding information on edge weights) we can see that the network has modules

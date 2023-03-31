@@ -1,0 +1,732 @@
+---
+title: 'CEFE Social Networks Course: Session 2'
+author: "Matthew Silk"
+date: "2023-03-30"
+output: 
+  html_document:
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this session we are going to cover the basics of descriptive measures of social networks, paying attention to their biological meaning in different contexts.
+
+First we need to load the R packages we will use. You may need to install these if you haven't used them before using the `install.packages()` command in R
+
+```{r packages, warning=FALSE,message=FALSE}
+
+set.seed(1)
+
+library(igraph)
+library(asnipe)
+library(viridis)
+library(sna)
+library(tnet)
+library(boot)
+library(corrplot)
+library(ggplot2)
+
+```
+
+First of al we are going to read in the `full_adj` adjacency matrix which we will use for a lot of today's analyses. We will make a weighted version of the network and then create an igraph object.
+
+We then adapt code from the last session to add attributes to the network object and plot the network. You can try changing aspects of this if you want.
+
+```{r create_input}
+
+#Read in the network object
+full_adj<-readRDS("full_adj.RDS")
+#Read in associated trait data
+ind_data<-readRDS("ind_data.RDS")
+names(ind_data)[1]<-"id"
+
+#Create a weighted version - we are adding edge weights from a beta distribution
+full_adj_weight<-full_adj*rbeta(length(full_adj),2,7)
+
+#Create the network object
+network<-igraph::graph_from_adjacency_matrix(full_adj_weight,mode="undirected",weighted=TRUE)
+V(network)$size<-5+ind_data$offspring
+V(network)$sex<-ind_data$sex
+V(network)$group<-ind_data$group
+
+#Plot the network object
+cols<-viridis(10)
+plot(network,vertex.label=NA,vertex.shape=ifelse(V(network)$sex=="M","square","circle"),vertex.color=cols[V(network)$group],edge.width=round(10*E(network)$weight),edge.color="bisque3")
+
+```
+
+We are also going to create a directed network to use an example in our analyses. It will be the matrix `dir_mat` and the network object `dir_net`.
+
+```{r create_directed}
+
+#Create 40 individuals and give them each a size
+inds2<-seq(1,40,1)
+size2<-rnorm(40,0,1)
+
+#Create a directed edgelist for their interactions
+el_dom<-matrix(NA,nr=2000,nc=2)
+for(i in 1:nrow(el_dom)){
+  t_i1<-sample(inds2,1,prob=0.1+size2+abs(min(size2)))
+  t_i2<-sample(inds2[-t_i1],1)
+  size_diff<-size2[t_i1]-size2[t_i2]
+  winner<-rbinom(1,1,boot::inv.logit(size_diff))
+  if(winner==1){
+    el_dom[i,1]<-t_i1
+    el_dom[i,2]<-t_i2
+  }
+  if(winner==0){
+    el_dom[i,2]<-t_i1
+    el_dom[i,1]<-t_i2
+  }
+}
+
+dir_net<-graph_from_edgelist(el_dom,directed=TRUE)
+E(dir_net)$weight<-1
+dir_net<-simplify(dir_net, edge.attr.comb=list(weight="sum"))
+
+dir_mat<-as_adjacency_matrix(dir_net,attr="weight",sparse=FALSE)
+
+ind_data2<-data.frame(inds2,size2)
+saveRDS(ind_data2,"ind_data2.RDS")
+saveRDS(full_adj,"dir_mat.RDS")
+saveRDS(ind_data,"dir_net.RDS")
+
+```
+
+We now have some networks we can use in demonstrating many of the descriptive measures used in social network analysis.
+
+***
+***
+
+## SESSION 2: PART 2
+
+### Calculating centrality measures for networks
+
+We will now work through the centrality measures from the powerpoint slides and demonstrate how to calculate different ones. Calculating degree and strength is straightforward in igraph or directly from the adjacency matrix.
+
+```{r centrality1}
+
+#Calculate degree using igraph
+deg<-igraph::degree(network)
+
+#Calculate degree directly from the matrix
+deg2<-colSums(sign(full_adj))
+
+#Calculate strength using igraph
+stre<-strength(network)
+
+#Calculate strength directly from the matrix
+stre2<-colSums(full_adj)
+
+#We could then see, for example, how strength and degree are related to each other in our network
+plot(stre~deg,pch=16,col=adjustcolor("black",0.5),las=1,xlab="Degree",ylab="Strength")
+
+```
+
+So in the `full_adj` network there is a strong positive correlation between the number of connections you have and the total weight of those connections, which we might expect in many (but not all) social systems.
+
+igraph also makes it is easy to calculate in-degree and out-degree in directed networks.
+
+```{r centrality2}
+
+#Here we calculate in-strength and out-strength as an example
+instre<-strength(dir_net,mode="in")
+outstre<-strength(dir_net,mode="out")
+
+#So we could ask if in-strength and out-strength are related to size in this network
+par(mfrow=c(1,2))
+plot(instre~ind_data2$size2,pch=16,col=adjustcolor("black",0.5),las=1,xlab="Size",ylab="In-strength")
+plot(outstre~ind_data2$size2,pch=16,col=adjustcolor("black",0.5),las=1,xlab="Size",ylab="Out-strength")
+
+```
+```{r plot_reset,echo=FALSE}
+par(mfrow=c(1,1))
+```
+
+If you are feeling confident then go back to the model where we generated the directed network and see if you can work out why these relationships exist.
+
+***
+
+The next level of node-level centrality measures are related to eigenvector centrality - measuring the influence of a node in a way that incorporates its second-order connections (or friends of friends).
+
+It is easy to calculate the eigenvector centrality and variants in igraph for undirected and directed networks
+
+```{r centrality3}
+
+#Calculate eigenvector centraliy for an undirected network
+evcent1<-igraph::eigen_centrality(network)
+
+#Note that to print the result you need to extract the $vector component of the object generated
+evcent1$vector
+
+#Calculate the eigenvector centrality of the directed network
+evcent2<-igraph::eigen_centrality(dir_net,directed=TRUE)$vector
+
+#You can calculate variants of eigenvector centrality such as PageRank in much the same way. Note that in ?page_rank there are more options to consider
+pr2<-igraph::page_rank(dir_net,directed=TRUE)$vector
+
+```
+
+We can see that in directed networks the eigenvector centrality is related more to in-strength than out-strength, which has important implications for how we interpret it as a measure of social influence in this case.
+
+```{r centrality4}
+
+#Plot eigenvector centrality against in-strength and out-strength
+par(mfrow=c(1,2))
+plot(evcent2~instre,pch=16,col=adjustcolor("black",0.5),las=1,xlab="In-strength",ylab="Eigenvector centrality")
+plot(evcent2~outstre,pch=16,col=adjustcolor("black",0.5),las=1,xlab="Out-strength",ylab="Eigenvector centrality")
+
+```
+
+```{r plot_reset2,echo=FALSE}
+par(mfrow=c(1,1))
+```
+
+If we want different interpretations of eigenvector centrality then it is possible to use extra arguments in the function to calculate undirected or unweighted versions.
+
+```{r centrality5}
+
+#Calculate the eigenvector centrality of the undirected representation of the network
+evcent2a<-igraph::eigen_centrality(dir_net,directed=FALSE)$vector
+
+#Compare the directed and undirected eigenvector centralities
+cor.test(evcent2,evcent2a,method="spearman")
+
+#Calculate the eigenvector centrality of the unweighted version
+evcent2b<-igraph::eigen_centrality(dir_net,directed=TRUE,weights=NA)$vector
+
+#Compare the weighted and unweighted eigenvector centralities
+cor.test(evcent2,evcent2b,method="spearman")
+
+```
+
+When we look at the correlation between the directed and undirected versions of the eigenvector centrality we can see they represent very different aspects of an individual's social network position in this network. Therefore, both could help us understand variation in social behaviour.
+
+The unweighted eigenvector centrality is similar to the weighted version in this case, but not the same. In general, you should avoid using unweighted versions of measures when information on edge weights is available, although there are some circumstances where you may be able to justify it.
+
+***
+
+The final set of centrality measure are the global measures such as *betweenness* and *closeness*. For us, igraph does a less good job at making these easy to calculate because of how it treats edge weights. Therefore we need to be careful, but we do have various options.
+
+In igraph we need to set the weights manually ourselves. For example, we might use the inverse of the edge weights (this is most common). The choice of correction here is not something that has received much research focus, but there are various plausible options that could be chosen.
+
+```{r centrality6}
+
+bet1<-igraph::betweenness(network,weights=1/E(network)$weights)
+close1<-igraph::closeness(network,weights=1/E(network)$weights)
+
+```
+
+But we could also use alternative R packages such as [tnet](https://cran.r-project.org/web/packages/tnet/tnet.pdf) or [sna]()
+
+```{r centrality7}
+
+#Create tnet network object from adjacency matrix
+tnet_network<-as.tnet(full_adj)
+
+#Calculate global centrality measures
+bet2<-tnet::betweenness_w(tnet_network)
+close2<-tnet::closeness_w(tnet_network)
+
+```
+
+Note that once again igraph allows you to calculate these global centrality measures for directed networks too. In the case of directed networks, a shortest path can only be in the direction of the edges involved. This means shortest paths will be longer in directed than the equivalent undirected network.
+
+Note that the way of dealing with directed networks is different for betweenness and closeness calculations
+
+```{r centrality8}
+
+#For betweenness we set directed=TRUE
+bet2<-igraph::betweenness(dir_net,directed=TRUE,weights=1/E(dir_net)$weights)
+#For closeness we can choose mode="in" or mode="out" for directed versions, and mode="all" for an undirected version
+close2<-igraph::closeness(dir_net,mode="in",weights=1/E(dir_net)$weights)
+
+```
+
+The final measure mentioned in the powerpoint that we haven't shown how to calculate is flow betweenness. This is calculated directly from the adjacency matrix in the package [sna](https://cran.r-project.org/web/packages/sna/sna.pdf).
+
+```{r centrality9, cache=TRUE}
+
+fb1<-sna::flowbet(full_adj_weight)
+
+```
+
+This measure takes much longer to calculate, especially in big networks. It may need a few minutes here.
+
+***
+***
+
+### Calculating other node-level measures
+
+We also introduced a few additional measures, that aren't measures of centrality in the same way as the previous measures are. You can see how to calculate these additional measures below.
+
+In igraph we normally would want to choose an option to calculate the weighted clustering coefficient. But look at the options for `type=` to see the other choices you can make.
+
+```{r extranode1}
+
+#Clustering coefficient
+clust1<-igraph::transitivity(network,type="barrat")
+
+#Plot clustering coefficient against betweenness
+plot(clust1~bet1,pch=16,col=adjustcolor("black",0.5),las=1,xlab="Betweenness",ylab="Clustering Coefficient")
+
+
+```
+
+Not here that in our main network there is a negative relationship between clustering coefficient and betweenness centrality. Perhaps think about why in this sort of network structure this might be the case.
+
+Calculating the coefficient of variation in edge weights is easiest using the adjacency matrix itself. We can calculate two slightly different versions of this measure which can tell us different things about an individual's social network position: the first includes all possible connections (i.e. including zero edge values), and the second calculates the variation only of completed edges (i.e. ignoring unconnected dyads).
+
+```{r extranode2}
+
+#First we create a new adjacency matrix from full_adj_weight where the diagonal is set to NA
+full_adj2<-full_adj_weight
+diag(full_adj2)<-NA
+
+#We calculate the coefficient variation for all possible edges
+cov_1<-apply(full_adj2,1,sd,na.rm=TRUE)/apply(full_adj2,1,mean,na.rm=TRUE)
+
+#Now we create a third adjacency matrix when all 0 edges are also set to NA
+full_adj3<-full_adj2
+full_adj3[full_adj3==0]<-NA
+
+#We calculate the coefficient variation only for completed edges
+cov_2<-apply(full_adj3,1,sd,na.rm=TRUE)/apply(full_adj3,1,mean,na.rm=TRUE)
+
+#We can see that these two measures aren't necessarily correlated with each other
+plot(cov_1,cov_2,pch=16,col=adjustcolor("black",0.5),xlab="Coefficient of variation (all dyads)",ylab="Coefficient of variation (completed edges only)")
+
+```
+
+Collectively these examples provide many of the more common ways to quantify the social network position of an individual, but this list is far from exhaustive and sometimes you may even want to develop your own measures.
+
+***
+***
+
+An important feature of these node-level social network measures is that their biological interpretation frequently depends on the structure of the network itself. Therefore you have to be careful when writing about what these measures mean.
+
+### How does the biological interpretation of network measures change with network structure?
+
+To demonstrate this simulate:
+
+1. a random network
+2. a small-world network
+3. the network from the full_adj adjacency matrix
+4. another network of you choice
+
+And calculate a selection of node-level measures for each network. Look into how the correlations between different pairs of metrics varies by the type of network. See if you can work out what the correlations might be before calculating them in the different networks.
+
+There is some code here you can reveal if you want some help or to check how you might do it.
+
+```{r measure_cors, class.source = "fold-hide", eval=FALSE}
+
+#Decide on network size
+n.ind<-100
+
+#Generate random network
+random<-igraph::erdos.renyi.game(n=n.ind,p.or.m=0.1,type="gnp",directed=FALSE,loops=FALSE)
+#Add edge weights
+E(random)$weight<-rbeta(n=gsize(random),2,6)
+
+#Generate small-world network
+sw<-sample_smallworld(dim=1,size=n.ind,nei=2,p=0.1,loops=FALSE,multiple=FALSE)
+#Add edge weights
+E(sw)$weight<-rbeta(n=gsize(sw),2,6)
+
+#Generate centralised network
+cent<-igraph::sample_pa(n=n.ind,power=2,m=5,directed=FALSE)
+#Add edge weights
+E(cent)$weight<-rbeta(n=gsize(cent),2,6)
+
+#Write a function to calculate 5 network measures for each network and store the results in a dataframe
+#We calculate strength, eigenvector centrality, betweenness, closeness and clustering coefficient
+metric_calc<-function(network){
+  t_str<-igraph::strength(network)
+  t_eig<-igraph::eigen_centrality(network)$vector
+  t_bet<-igraph::betweenness(network,weight=1/E(network)$weight)
+  t_clo<-igraph::closeness(network,weight=1/E(network)$weight)
+  t_clu<-igraph::transitivity(network,type="barrat")
+  output<-data.frame(t_str,t_eig,t_bet,t_clo,t_clu)
+  names(output)<-c("Strength","Eigenvector","Betweenness","Closeness","Clustering")
+  return(output)
+}
+
+random_mets<-metric_calc(random)
+sw_mets<-metric_calc(sw)
+fa_mets<-metric_calc(network)
+cent_mets<-metric_calc(cent)
+
+par(mfrow=c(2,2))
+random_cors<-cor(random_mets, method = c("spearman"))
+corrplot(random_cors)
+sw_cors<-cor(sw_mets, method = c("spearman"))
+corrplot(sw_cors)
+fa_cors<-cor(fa_mets, method = c("spearman"))
+corrplot(fa_cors)
+cent_cors<-cor(cent_mets, method = c("spearman"))
+corrplot(cent_cors)
+
+```
+```{r plot_reset3,echo=FALSE}
+par(mfrow=c(1,1))
+```
+
+This covers most of the basics of describing the network position of individual nodes, and some details on how the interpretation of these measures is influenced by network structure.
+
+***
+***
+***
+
+The next level of network structure to think about is the neighbourhood of the nodes, or mesoscale structure. Here we will work through the four types of mesoscale structure detailed in the powerpoint, focussing especially on community detection.
+
+## SESSION 2: PART 3
+
+### Working with triads
+
+We will start at the level of the triad. Triads are a simple (but important) example of a [motif](https://www.sciencedirect.com/topics/biochemistry-genetics-and-molecular-biology/network-motif). It is possible to use a similar approach for other common network motifs (or to develop your own to look for more complex patterns).
+
+Triads are closely related to measures of transitivity or clustering coefficient as in order to have high levels of clustering a network neighbourhood requires there to be lots of triads.
+
+```{r triads}
+
+#We can do a triad census like this
+triads<-igraph::triad_census(network)
+
+#The object looks like this, which isn't very meaningful to us yet
+triads
+
+```
+
+Look at the help page for ?triad_census, which will help explain in the Details section which triads the numbers refer to.
+
+We can see that we are finding lots of the triads `003` (no connections between the 3), `102` (one undirected connection), '201' (two undirected connections) and `300` (fully connected). This makes sense as these are the only options for an undirected network. If we were to run the function on `dir_net` instead we would find more types of triad.
+
+One question you might have is what can this tell us about our network? Something we can do is to compare the triads in our network to another similar network to capture structural differences between them.
+
+For example, we could compare our network to a random (erdos renyi) network (this is not necessarily the best null model, but it will do to make out point here). First we generate a random network with the same edge density, then conduct the triad census and compare the results
+
+```{r triads2}
+
+#Decide on network size
+n.ind<-100
+
+#Generate random network
+random2<-igraph::erdos.renyi.game(n=n.ind,p.or.m=edge_density(network),type="gnp",directed=FALSE,loops=FALSE)
+#Add edge weights
+E(random2)$weight<-rbeta(n=gsize(random2),2,6)
+
+#Do triad census for random network
+triads_random<-igraph::triad_census(random2)
+
+#Simplify the two ouputs to ignore impossible triads
+triads2<-triads[triads>0]
+triads_random2<-triads_random[triads_random>0]
+
+#Compare the results
+triads2
+triads_random2
+
+```
+
+We can see that in our "empirical" network we have many more `300` triads than there would be in a random network, and many fewer `201` triads. To do this comparison properly we would generate multiple random networks to create a distribution to compare to. This is something we will look into in the next session.
+
+***
+
+### Finding cliques
+
+Finding cliques using igraph is similarly easy to conducting a triad census, it is simply one command to use.
+
+```{r cliques1}
+
+#The function to find cliques
+all_cliques<-igraph::cliques(network)
+
+```
+
+But we have to be careful here, the `all_cliques` object is **HUGE** if we are not fussy about what size of clique we are interested in, so it pays to use the `min=` and `max=` arguments like we do below.
+
+```{r cliques2}
+
+#The all_cliques object is huge
+length(all_cliques)
+
+#But we can focus on cliques of particular sizes
+big_cliques<-igraph::cliques(network,min=6)
+
+#which is much smaller
+length(big_cliques)
+
+```
+
+If you look at the identities of nodes in `big_cliques` do you notice anything about the cliques detected? It should be possible to work out why this pattern is there, and it links nicely also to the next section...
+
+***
+
+### Community detection and modularity
+
+Community detection is a very popular set of tools for researchers working with network analysis. It can provide LOTS of really useful information about a network, but is a tool to use [with caution](https://skewed.de/tiago/blog/descriptive-inferential), especially as in the small and noisy networks we work with it can be easy to detect structures when none are there (a problem which can be made worse if you pick the wrong algorithm to find communities).
+
+The different community detection algorithms are:
+
+* cluster_edge_betweenness (nb. edge weights interpreted as distances not connection strengths)
+* cluster_fast_greedy (not great to use in small networks)
+* cluster_label_prop
+* cluster_infomap
+* cluster_leading_eigen
+* cluster_louvain
+* cluster_leiden (updated version of the Louvain algorithm)
+* cluster_optimal
+* cluster_spinglass
+* cluster_walktrap 
+
+Information about each method (including some of their strengths and weaknesses) as well as links to the papers where they are first defined are available on the help page for each algorithm.
+
+```{r communities1}
+
+#You can calculate community membership like this - we use three examples here
+comms<-igraph::cluster_infomap(graph=network,e.weights=E(network)$weight)
+comms2<-igraph::cluster_louvain(graph=network,weights=E(network)$weight)
+#Note that for the cluster_edge_betweenness we get a warning about how it uses edge weights (which is new!)
+comms3<-igraph::cluster_edge_betweenness(graph=network,weights=1/E(network)$weight)
+
+```
+
+An important thing to note there is that the object generated by each community detection algorithm is a little different, as each algorithm needs to retain different information or takes a different approach to finding the structure in the network
+
+```{r communities2}
+
+str(comms)
+str(comms2)
+str(comms3)
+
+```
+
+Normally, the thing we are most interested in is `$membership` which tells us which individuals are in which community
+
+```{r communities3}
+
+comms$membership
+comms2$membership
+comms3$membership
+
+```
+
+We can see that for the main network we are working with the communities are nicely aligned, which we expect as even by eye this network has strong community structure.
+
+As mentioned in the powerpoint a key way to measure the strength of a division into communities is using **modularity** (which is actually used in many of the algorithms to find the optimal community structure). Modularity is a number between (approximately) 0 and 1. Networks with a modularity around 0.3-0.6 could typically be considered to have intermediate levels of community structure, while levels of modularity of 0.7 or above indicate very strong community structure.
+
+We can calculate modularity like this:
+
+```{r modularity}
+
+modularity(network,comms$membership)
+
+```
+
+So we can see that our "empirical" network has a strongly modular structure - not surprising given how we simulated it.
+
+We can calculate a few other things easily from the `communities` (see [here](https://igraph.org/r/doc/communities.html)) object which might be useful, such as:
+
+The size of the social communities
+
+```{r commsize}
+
+sizes(comms)
+
+```
+
+Whether edges connect within or between communities
+
+```{r commcross}
+
+crossing(comms,network)
+
+```
+
+We can of course, also use our community membership to help us plot the network. There are a couple of potential options here.
+
+The first is to use node colour to represent community membership.
+
+```{r commplot1}
+
+cols<-viridis(10)
+plot(network,vertex.label=NA,vertex.shape=ifelse(V(network)$sex=="M","square","circle"),vertex.color=cols[comms$membership],edge.width=round(10*E(network)$weight),edge.color="bisque3")
+
+```
+
+And the second is to mark the communities with polygons in the background of the network. In this plot the node colour is the groups we initially assigned individuals too with the generative model and the background shading is the communities found by the community detection algorithm.
+
+```{r commplot2}
+
+cols<-viridis(10)
+plot(comms, network,vertex.label=NA,vertex.shape=ifelse(V(network)$sex=="M","square","circle"),col=cols[V(network)$group],mark.col=adjustcolor(cols,0.2),mark.border=NA,edge.width=round(2*E(network)$weight),edge.color="dark grey")
+
+```
+
+We can see that with this strong community structure, the match is perfect
+
+***
+
+Now try repeating some of these community detection approaches in the other networks we have generated or new networks that you create to see what happens when community structure is less strong.
+
+See if you can generate a network with a modularity of 0.4.
+
+```{r comm_extra, class.source = "fold-hide", eval=FALSE}
+
+#For our random network
+comms<-igraph::cluster_infomap(graph=random2,e.weights=E(random2)$weight)
+modularity(random2,comms$membership)
+sizes(comms)
+
+#Note that the random network still has a community structure detected - this shows how sometimes community detection can be misleading.
+#The modularity is quite low though.
+
+network2<-igraph::sample_islands(islands.n=10,islands.size=10,islands.pin=0.25,n.inter=3)
+comms<-igraph::cluster_infomap(graph=network2,e.weights=E(network2)$weight)
+modularity(network2,comms$membership)
+sizes(comms)
+
+#Notice now that the communities detected by the algorithm now don't match the input groups so well (for example, they vary in size rather than all being 10)
+
+```
+
+It is also worth noting that there are [some additional node-level measures](https://www.nature.com/articles/nature03288) you can calculate related to community structure, but we won't go into them here.
+
+***
+
+### Core-periphery structure
+
+Core-periphery structure is used less in animal social network analysis, but is still useful to think about when considering the network structure of animal populations.
+
+I will show quickly how to calculate some core-periphery related metrics for a centralised network. This uses functions from the package [brainGraph](https://cran.r-project.org/web/packages/brainGraph/brainGraph.pdf) related to the [rich-club coefficient](https://en.wikipedia.org/wiki/Rich-club_coefficient).
+
+```{r core_periphery}
+
+#Decide on network size
+n.ind<-100
+
+#Generate centralised network
+cent<-igraph::sample_pa(n=n.ind,power=2,m=5,directed=FALSE)
+#Add edge weights
+E(cent)$weight<-rbeta(n=gsize(cent),2,6)
+
+#Calculate information about the network core (note that we can do this with or without weights)
+core_info<-brainGraph::rich_core(cent,weighted=FALSE)
+
+core_info
+
+```
+
+This dataframe tells us 1) the rich-club coefficient of the network; 2) the rank (degree/strength) of the cut-off to be in the core of the network; 3) the degree/strength of the cut-off; 4) the proportion of the network in the core; and 5) whether the edge weights were used in the calculation.
+
+We could plot the network to show the core-periphery structure.
+
+```{r core_periphery2}
+
+#Assign core or not as a node attribute
+V(cent)$core<-as.numeric(igraph::degree(cent)>=core_info$k.r)
+
+#Plot the network to show the core (red) and periphery (grey)
+plot(cent,vertex.label=NA,vertex.color=ifelse(V(cent)$core==1,"firebrick","lightgray"))
+
+```
+
+We can use this to identify influential nodes or regions of the network or we could use the rich-club coefficient to compare between different networks (or compare a focal network to some appropriate null models).
+
+***
+***
+***
+
+## SESSION 2: PART 4
+
+In the final part of this session we are going to go through how to calculate a selection of basic network-level or macroscale description of social network structure. I will give examples of how to calculate them using the `network` object to start with, but it would be good to calculate them for some of the other networks in this tutorial and compare the values. You could also generate your own networks to measure!
+
+### Network-level measures
+
+A key thing to note when calculating basic network-level metrics is that some measures require adjustments for edge weights (which otherwise will be treated as costs rather than strengths).
+
+```{r network_level1}
+
+#Calculate DENSITY
+igraph::edge_density(network)
+
+#Calculate AVERAGE PATH LENGTH
+igraph::mean_distance(network,weights=1/E(network)$weight)
+
+#Calculate (unweighted) TRANSITIVITY
+igraph::transitivity(network,type="global")
+
+#Calculate EFFICIENCY
+igraph::global_efficiency(network,weights=1/E(network)$weight)
+
+```
+
+***
+
+### Degree distributions
+
+igraph has a specific function for calculating degree distributions, but it is also possible to calculate degree and then using the vector produced as well.
+
+```{r network_level2}
+
+#Conventional degree distribution
+deg_dist<-igraph::degree_distribution(network)
+plot(deg_dist,las=1,pch=16,xlab="Degree",ylab="Frequency")
+
+#Cumulative degree distribution (proportion of individuals with a degree of that value or less)
+deg_dist<-igraph::degree_distribution(network,cumulative=TRUE)
+plot(1-deg_dist,las=1,pch=16,xlab="Degree",ylab="Cumulative frequency")
+
+#A histogram version from calculating degree
+deg<-igraph::degree(network)
+hist(deg,breaks=seq(1,max(deg),1),main="",xlab="Degree")
+
+#You may want correct the degree for network size to help with comparisons between networks
+deg2<-deg/(gorder(network)-1)
+hist(deg2,breaks=seq(0,0.2,0.01),main="",xlab="Degree")
+
+```
+
+***
+
+### Other metric distributions
+
+We can work in the same with other individual-level measures - the mean, variance of full distribution can capture different aspects of network structure.
+
+```{r network_level3}
+
+#For measures like betweenness we may want to use a correction again (but remember that this correction is different than for degree)
+bet<-igraph::betweenness(network,weights=1/E(network)$weight)
+bet2<-bet/(gorder(network)^2-gorder(network))
+
+#Mean betweenness
+mean(bet2)
+#Coefficient of variation in betweenness
+sd(bet2)/mean(bet2)
+#Full betweenness distribution
+hist(bet2,breaks=seq(0,0.1,0.001),main="",xlab="Betweenness")
+
+#For other measures like clustering coefficient we don't need to worry so much about corrections
+clu<-igraph::transitivity(network,type="barrat")
+
+#Mean clustering coefficient
+mean(clu)
+#Coefficient of variation in clustering coefficient
+sd(clu)/mean(clu)
+#Full clustering coefficient distribution
+hist(clu,breaks=seq(0,1,0.05),main="",xlab="Clustering coefficient")
+
+
+#Finally we may want consider multivariate metric distributions, for example the joint distribution of degree and clustering coefficient
+plot(clu~deg2,pch=16,cex=3,col=adjustcolor("firebrick",0.5),xlim=c(0,0.2),ylim=c(0,1),las=1,xlab="Degree",ylab="Clustering coefficient")
+
+```
+
+That covers almost all of the basics of descriptive social network analysis, which leaves us well placed to explore how to conduct statistical inference in networks with the next session.
+
+***
+***
+***
+
