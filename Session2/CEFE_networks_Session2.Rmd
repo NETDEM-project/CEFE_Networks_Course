@@ -43,14 +43,16 @@ ind_data<-readRDS("ind_data.RDS")
 names(ind_data)[1]<-"id"
 
 #Create a weighted version - we are adding edge weights from a beta distribution
-full_adj_weight<-full_adj*rbeta(length(full_adj),2,7)
-
+full_adj_weight<-full_adj
+full_adj_weights<-rbeta(sum(upper.tri(full_adj)),2,7)
+full_adj_weight[upper.tri(full_adj_weight)]<-full_adj_weights*full_adj_weight[upper.tri(full_adj_weight)]
+full_adj_weight[lower.tri(full_adj_weight)]<-t(full_adj_weight)[lower.tri(full_adj_weight)]
 
 #Create the network object
 network<-igraph::graph_from_adjacency_matrix(full_adj_weight,mode="undirected",weighted=TRUE)
-V(network)$size<-5+ind_data$offspring
-V(network)$sex<-ind_data$sex
-V(network)$group<-ind_data$group
+igraph::V(network)$size<-5+ind_data$offspring
+igraph::V(network)$sex<-ind_data$sex
+igraph::V(network)$group<-ind_data$group
 
 #Plot the network object
 cols<-viridis(10)
