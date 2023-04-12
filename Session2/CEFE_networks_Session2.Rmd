@@ -45,6 +45,7 @@ names(ind_data)[1]<-"id"
 #Create a weighted version - we are adding edge weights from a beta distribution
 full_adj_weight<-full_adj*rbeta(length(full_adj),2,7)
 
+
 #Create the network object
 network<-igraph::graph_from_adjacency_matrix(full_adj_weight,mode="undirected",weighted=TRUE)
 V(network)$size<-5+ind_data$offspring
@@ -90,8 +91,8 @@ dir_mat<-as_adjacency_matrix(dir_net,attr="weight",sparse=FALSE)
 
 ind_data2<-data.frame(inds2,size2)
 saveRDS(ind_data2,"ind_data2.RDS")
-saveRDS(full_adj,"dir_mat.RDS")
-saveRDS(ind_data,"dir_net.RDS")
+saveRDS(dir_mat,"dir_mat.RDS")
+saveRDS(dir_net,"dir_net.RDS")
 
 ```
 
