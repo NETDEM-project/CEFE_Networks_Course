@@ -1,0 +1,462 @@
+---
+title: 'CEFE Social Networks Course: Session 4'
+author: "Matthew Silk"
+date: "2023-04-13"
+output: 
+  html_document:
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Set up R environment
+
+First we need to load the R packages we will use. You may need to install these if you haven't used them before using the `install.packages()` command in R. For genNetDem you will need to follow the instructions [here](https://github.com/NETDEM-project/genNetDem) to install it.
+
+```{r packages, warning=FALSE,message=FALSE}
+
+set.seed(1)
+
+library(igraph)
+library(asnipe)
+library(viridis)
+library(assortnet)
+library(genNetDem)
+library(sna)
+library(STRAND)
+library(cmdstanr)
+library(sbm)
+library(ergm)
+library(ergm.count)
+library(tnet)
+
+```
+
+***
+
+## SESSION 4: PART 2
+
+[Stochastic block models (**SBMs**)](https://skewed.de/tiago/blog/inference-compression) are a generative model for networks that can be used a statistical tool to model group or community structure in networks. They can be used to identify any groups of nodes in a network that share similar patterns of sociality, so in addition to their traditional use to detect community structure, they can also be applied to detect assortative mixing (*think of our colour example from the last session*), disassortative mixing (*when red is more likely to interact with orange and vice versa*) and core-periphery structure among other network features. However, for now we fill focus on how they can be used to detect network communities as this is a common challenge in animal social and movement networks.
+
+Let's start with our `full_adj` network again and add some edge weights as we have before. We can then fit a simple SBM using the R packages [STRAND](https://github.com/ctross/STRAND) and [sbm](https://cran.r-project.org/web/packages/sbm/index.html).
+
+```{r network}
+
+#Read in the network object
+full_adj<-readRDS("full_adj.RDS")
+#Read in associated trait data
+ind_data<-readRDS("ind_data.RDS")
+names(ind_data)[1]<-"id"
+
+#Create a weighted version of full_adj - we are adding edge weights from a poisson distribution this time
+full_adj_weight<-rpois(sum(upper.tri(full_adj)),4)
+full_adj[upper.tri(full_adj)]<-full_adj_weight*full_adj[upper.tri(full_adj)]
+full_adj[lower.tri(full_adj)]<-t(full_adj)[lower.tri(full_adj)]
+
+#Create igraph network object
+network<-igraph::graph_from_adjacency_matrix(full_adj,mode="undirected",weighted=TRUE)
+igraph::V(network)$size<-5+ind_data$offspring
+igraph::V(network)$sex<-ind_data$sex
+igraph::V(network)$group<-ind_data$group
+
+```
+
+The advantage of **STRAND** is that it is easy to combine stohastic block models with other types of network model that incorporate features of nodal and dyadic regressions - in fact you can specify separate models for focal (the iniator of edges), target (the receiver of edges) and dyad (the combined effect of the dyad) just as you would in the social relations model that was introduced at the end of the last session. However, a big disadvantage of **STRAND** is that you have to pre-specify the group you are interested in, making it less useful for finding communities without extensive model comparisons (although this is promised as a tool for future developments). **STRAND** is therefore better for testing patterns of assortativity of diassortativity between known groups (as we have in our example network) or traits (e.g. sex).
+
+For this purpose of finding communities in the network, using the **sbm** package is better as it does not rely on pre-specified groups. You will see when you run the code that it automatically compares models for different numbers of groups for you to find the best fit to your dataset. 
+
+Before working with STRAND you may need to install `cmdstan` and run `cmdstanr::check_cmdstan_toolchain(fix=TRUE)`. Otherwise you will get errors when fitting models. Even then you may still have issues. If this is the case then look at how the model works, but spend more time working with the code for the sbm package and trying out some of the challenges below.
+
+- Fiting an SBM with STRAND
+
+```{r sbms1, eval=FALSE}
+
+#Create groups data
+groups<-data.frame(as.factor(ind_data$group))
+names(groups)<-"groups"
+
+#Format data for STRAND
+model_dat<-make_strand_data(self_report=list(full_adj),
+                            block_covariates = groups,
+                            individual_covariates=NULL,
+                            dyadic_covariates=NULL,
+                            outcome_mode = "poisson")
+
+set_cmdstan_path("C:/Users/matth/Documents/cmdstan-2.31.0")
+
+#Fit model
+sbm1<-STRAND::fit_block_model(data=model_dat,
+                              block_regression=~groups,
+                              focal_regression=~1,
+                              target_regression=~1,
+                              dyad_regression=~1,
+                              mode="mcmc",
+                              stan_mcmc_parameters = list(seed = 1, chains = 1,parallel_chains = 1, 
+                                                          refresh = 100, iter_warmup = 100, iter_sampling = 100,
+                                                          max_treedepth = NULL, adapt_delta = NULL))
+
+#Model summary - be warned this is a really complicated object
+res_sbm1<-summarize_strand_results(sbm1)
+
+#This is the most important part to look at for us
+res_sbm1$summary
+
+```
+
+You can set that the offset effects are much less negative for edges that occur within a group, e.g. `offset, 1 to 1` or `offset, 2 to 2`.
+
+- Fitting an SBM with sbm package
+
+```{r sbms2}
+
+#Add rownames and colnames to matrix
+rownames(full_adj)<-colnames(full_adj)<-seq(1,100,1)
+
+#Code to estimate the stochatic block model (without covariates)
+sbm2<-estimateSimpleSBM(full_adj,model ="poisson",directed=FALSE,dimLabels="ID",estimOptions=list(plot=FALSE))
+
+#We can then plot our block structure compared to the social network
+plot(sbm2)
+plot(sbm2,type="expected")
+
+#We can extract information on the number of blocks
+sbm2$nbBlocks
+
+#We can also show which individuals are in which blocks either in summarised form
+sbm2$memberships
+#or in matrix form
+sbm2$indMemberships
+
+#We can also show the proportion of the network in each block
+sbm2$blockProp
+
+#The parameters influencing connection strength between members of the different blocks
+sbm2$connectParam
+
+#And using these, model predictions of the edge strengths for the whole network (here for the first 20 individuals only for space reasons).
+sbm2$expectation[1:20,1:20]
+
+```
+
+Using what you know about the structure of the network from previous sessions, see if you are happy with how well the model has fitted the data. Perhaps think about what the model plot would like for the other types of networks we have worked with in previous sessions.
+
+***
+
+Using the model object we can also compare how well the network structure is explained with different numbers of blocks - this could be useful if we wanted to check whether there were explanations with similar power to explain our network structure.
+
+```{r sbms3}
+
+alt_models<-sbm2$storedModels
+
+#ICL means integrated compete-data likelihood
+plot(alt_models$ICL~alt_models$nbBlocks,pch=16,cex=2,las=1,ylab="ICL",xlab="Number of blocks")
+
+```
+
+Another feature that might be useful is that we can look at the probability of an individual being in the community that it is assigned to. Here we look at it only for the first 30 individuals, but feel free to look further through this dataframe.
+
+```{r sbms4}
+
+sbm2$probMemberships[1:30,]
+
+```
+
+***
+
+You can also use SBMs to generate networks, or in STRAND use a combination of the SBMs and the social relations model. Here is a quick demonstration of using **STRAND** to simulate from an SBM
+
+```{r SBMsims}
+
+#I've adapted this code directly from the help page of the package 
+
+#One type of group
+V<-1            
+#Five groups
+G<-5            
+#Number of individuals
+N_id<-100       
+
+#Put individuals in groups
+group<-sample(1:5,N_id,replace=TRUE)
+#Parameters for between and within group social interactions
+B<-matrix(-6, nrow=G, ncol=G)
+diag(B)<- -1.5
+B[1,3] = -5
+B[3,2] = -4
+
+#Simulate the network
+sbm_adj<-simulate_sbm_network(N_id=N_id, B=list(B=B), V=V, groups=data.frame(clique=factor(group)),
+                         individual_predictor=matrix(rnorm(N_id,0,1), nrow=N_id, ncol=1), 
+                         individual_effects=matrix(c(1.7, 0.3),ncol=1, nrow=2),
+                         mode="bernoulli")
+
+#Convert into igraph object and plot
+sbm_net<-graph_from_adjacency_matrix(sbm_adj$network, mode = c("directed"))
+cols<-viridis(5)
+V(sbm_net)$color = cols[sbm_adj$group_ids$clique]
+plot(sbm_net,vertex.label=NA,vertex.size=10,edge.arrow.size=0.2)
+
+#Note that the objects produced by the STRAND simulation algorithm contain lots of additional information about the individuals and dyads
+str(sbm_adj)
+
+```
+We can see that gives 1) the network; 2) the expected tie strength; 3) the groups for each individual; 4) the individual predictors simulated for each individual; 5) the dyadic predictors, and then further less useful information.
+
+Note also that **STRAND** simulates directed networks by default. If you want to simulate undirected networks with community structure you could symmetrise the networks produced by **STRAND** by taking the aggregate, maximum, mean or minimum value of the dyad, or use another package.
+
+For example, for simpler models, **sbm** also has the functionality to simulate networks with a block structure
+
+```{r SBMsims2}
+
+N_id<-100
+#Group proportions - note we make groups of different sizes here
+blockProp <- c(0.25,0.25,0.25,0.1,0.15)
+#Connectivity matrix - raw probabilities this time
+means<-diag(.4, 5) + 0.05
+means[1,2]<-means[2,1]<-0.35
+connectParam<-list(mean=means)
+#Generate network
+mySampler<-sampleSimpleSBM(N_id,blockProp,connectParam,model='bernoulli')
+#Plot block structure using sbm functionality
+plot(mySampler)
+
+#Generate adjacency matrix
+sbm_adj2<-mySampler$networkData
+
+```
+
+Another complementary option is my package [genNetDem](https://github.com/NETDEM-project/genNetDem) that we used briefly yesterday can also simulate networks with community structure.
+
+***
+
+Now time for a challenge to learn the SBM framework a little better - try simulating social networks using tools from Session 1 or using one of the packages mentioned here with a group structure you know and then fitting SBMs to them. Perhaps try with directed networks, networks with different types of edge weights or with less clearly divided or hierarchical subgroups. I've included an example below if you want some inspiration.
+
+The **sbm** package also allows you to fit SBMs to mulitplex networks and bipartite networks too, so if you are feeling very keen you could also try one of these - I've illustrated an example with multiplex networks below.
+
+***
+***
+***
+
+##SESSION 4: PART 3
+
+Exponential random graph models (**ERGMS**) are one of the most widely used tools in social network analysis in sociology, but have also been used a little [to study animal social networks](https://doi.org/10.1016/j.anbehav.2017.08.005) and recently also applied to [movement networks](https://movementecologyjournal.biomedcentral.com/articles/10.1186/s40462-023-00380-7).
+
+They are very powerful tools for studying well-sampled network data, especially behavioural interactions in groups. They are particularly useful for situations where you may want to mix nodal and dyadic explanatory variables, or to study social processes such as transitive closure or reciprocity. We will use some of the networks created above and in previous sessions to run through the basics of fitting ERGMs.
+
+The best developed packages for fitting ERGMs fall within the [network](https://cran.r-project.org/web/packages/network/index.html) suite of packages. Unfortunately for us this means learning a few new basic network-handling commands in R which are similar but not the same to igraph...
+
+```{r ergms1_setup}
+
+rownames(sbm_adj2)<-colnames(sbm_adj2)<-seq(1,100,1)
+diag(sbm_adj2)<-0
+sa2.edgelist<-as.tnet(sbm_adj2)
+sa2<-network(sa2.edgelist[,1:2],directed=FALSE)
+
+#Use and create some individual/nodal variables
+groups<-mySampler$memberships
+sex<-sample(c("M","F"),100,replace=TRUE)
+size<-rnorm(100)
+
+#Set some node attributes
+network::set.vertex.attribute(sa2,"group",groups)
+network::set.vertex.attribute(sa2,"sex",sex)
+network::set.vertex.attribute(sa2,"size",size)
+
+```
+
+Once we have the data set-up then fitting a basic ERGM is relatively simple using the ergm package - we will start with a binary, undirected network - from sbm_adj2. You can read more about the types of terms that can be fitted in ERGMs [here](https://cran.r-project.org/web/packages/ergm/vignettes/ergm-term-crossRef.html). There are a lot! Don't be put-off we will go over many of the main ones here.
+
+One crucial point is that in ERGMs for binary networks including the `edges` or `density` term is important as it operate somewhat like an intercept in a linear model and makes interpreting other terms much easier.
+
+```{r ergms1}
+
+#Let's start then with just the intercept only model
+#We fit it like this
+ergm0<-ergm(sa2~edges)
+#And can look at the model summary like this
+summary(ergm0)
+
+#We can use inbuilt commands in the ERGM package to look at model goodness-of-fit
+gof(ergm0)
+
+```
+
+These goodness-of-fit tests cover the basics, and we may want to design further tests of our own to tests other aspects of network structure but it is a good start. For each of these outputs it gives us the observed values for different network statistics as well as information on the `min`, `mean` and `max` from the model outputs. We want these two-tailed p values to be non-significant really. 
+
+As you can see our intercept only model does a terrible job for pretty much all os the different outputs here!
+
+Therefore we may need to make our model more complex, the obvious starting point is by including the fact that individuals are assorted within groups - for this we use the `nodematch` term - look this up in the help pages to learn more.
+
+```{r ergms2}
+
+ergm1<-ergm(sa2~edges+nodematch("group"))
+summary(ergm1)
+gof(ergm1)
+
+```
+
+Things have improved but perhaps not as much as we'd hoped. Often in ERGMs we can make individual terms more advanced by adjusting arguments within them, for example here we let the model estimate a different assortativity value for different groups.
+
+```{r ergms3}
+
+ergm2<-ergm(sa2~edges+nodematch("group",diff=TRUE))
+summary(ergm2)
+gof(ergm2)
+
+```
+
+We are still not doing a great job of explaining key aspects of our network structure, expecially the edgewise shared partners. But before you try and improve the model fit further, wwe'll first introduce more of the basic terms for binary, undirected ERGMs
+
+```{r ergms4}
+
+#We can include multiple explanatory variables easily
+ergm3<-ergm(sa2~edges+nodematch("group",diff=TRUE)+nodematch("sex"))
+
+#For factors we can include the `nodefactor` terms to test for differences in connectivity between levels
+ergm4<-ergm(sa2~edges+nodematch("group",diff=TRUE)+nodematch("sex")+nodefactor("sex"))
+#The equivalent for continuous covariates is the `nodecov` term
+ergm5<-ergm(sa2~edges+nodematch("group",diff=TRUE)+nodematch("sex")+nodefactor("sex")+nodecov("size"))
+#While absdiff let's us test the importance of similarity between continuous node traits on the probability of an edge
+ergm6<-ergm(sa2~edges+nodematch("group",diff=TRUE)+nodematch("sex")+nodefactor("sex")+nodecov("size")+absdiff("size"))
+
+```
+
+We may want to add in more structural terms - here use triangles which estimates such as the number of triangles compared with a random network. The code below shows this but I haven't run it as the models take a long time to fit
+
+```{ergm_tris, eval=FALSE}
+
+ergm7<-ergm(sa2~edges+triangles+nodematch("group"))
+
+#We can also make these structural terms more complex by assessing how they vary according to attributes
+ergm8<-ergm(sa2~edges+triangle(attr="group",diff=TRUE)+nodematch("group",diff=TRUE)+nodematch("sex")+nodefactor("sex")+nodecov("size")+absdiff("size"))
+
+```
+
+Feel free to try more different terms to get a feel for how ERGMs work. You will see that in the model summary we have a lot of the information we are used to for the assessment of model fit (e.g. AIC) as well as the importance of individual variables in the model. We won't go into details of inference here.
+
+One difference between ERGMs and the types of statistical modelling you are probably more used to is that it is frequently encouraged to fit a "basic" version of your ERGM that includes the structural terms you think are important in your network before adding variables related to your hypotheses of interest (e.g. node traits or edge traits). In part this is simply a difference between fields, but it is also related to the fact that ERGMs with structural terms can at times be difficult to fit (often with problems with MCMC convergence).
+
+At a more advanced levels there is also plenty of advice online related to refining the sampling to improve model convergence and parameter estimation, but won't go into that here.
+
+Instead we will briefly introduce fitting ERGMs to directed and weighted networks. After that you will have a lot of the tools to start fitting ERGMs and testing them a little more.
+
+First directed networks...
+
+```{r ergms_dir}
+
+dir_mat<-readRDS("dir_mat.RDS")
+ind_data<-readRDS("ind_data2.RDS")
+
+#Create a binary version with only strong interactions included
+dir_mat[which(dir_mat<3,arr.ind=TRUE)]<-0
+dir_mat2<-sign(dir_mat)
+
+#Create network object
+rownames(dir_mat2)<-colnames(dir_mat2)<-seq(1,40,1)
+diag(dir_mat2)<-0
+dir.edgelist<-as.tnet(dir_mat2)
+dir<-network(dir.edgelist[,1:2],directed=TRUE)
+
+#Set node attributes
+network::set.vertex.attribute(dir,"size",ind_data$size2)
+
+#Fit a model with just intercept and size
+dir1<-ergm(dir~edges+nodecov("size"))
+summary(dir1)
+
+#But now with directed networks we can include new terms related to the direction of edges
+#Such as the tendency for mutual connections
+dir2<-ergm(dir~edges+nodecov("size")+mutual)
+summary(dir2)
+#We actually see that mutual edges are less likely than you'd expect by chance
+
+#When we add these more complex structural terms, the ERGM starts using MCMC to fit the model. We can check model diagnostics like this
+mcmc.diagnostics(dir2)
+#They look OK here despite the relatively short Markov chain
+
+```
+
+And we can also include terms for transitive and cyclical triads. Again, the code below shows this but I haven't run it as the models take a long time to fit.
+
+```{r ergms_dir2, eval=FALSE}
+
+dir3<-ergm(dir~edges+mutual+ttriad+ctriad,silent=TRUE)
+summary(dir3)
+
+```
+
+Feel free to explore more different combinations of parameters, but be prepared for long run times and issues with convergence, especially if you include lots of similar terms... This is part of the challenge of using ERGMs...
+
+***
+
+For weighted networks there are a reduced set of terms that can be included. Another addition is that ideally the intercept should now consist of both the `sum` term and `nonzero` term to deal with zero-inflation in the distribution of edge weights (this is almost inevitable in social networks which tend to be quite sparse).
+
+The availability of different distributions for edge weights is also relatively limited, although is improving. We will stick to poisson models for edge weights here.
+
+
+```{r ergms_weight}
+
+#Reduce the weight of remaining edges by 2 so lowest count of interactions is 1
+dir_mat3<-dir_mat
+dir_mat3[which(dir_mat3>0,arr.ind=TRUE)]<-dir_mat3[which(dir_mat3>0,arr.ind=TRUE)]-2
+
+#Create network object
+rownames(dir_mat3)<-colnames(dir_mat3)<-seq(1,40,1)
+diag(dir_mat3)<-0
+dir.edgelist<-as.tnet(dir_mat3)
+dirB<-network(dir.edgelist[,1:2],directed=TRUE)
+
+#Set node attributes
+network::set.vertex.attribute(dirB,"size",ind_data$size2)
+
+#Set edge attributtes
+network::set.edge.attribute(dirB,"weight",as.vector(dir.edgelist[,3]))
+
+
+#Fit a model with just intercept and size
+dirB1<-ergm(dirB~sum+nonzero+nodecov("size"),reference=~Poisson,response="weight")
+summary(dirB1)
+
+#But now with directed networks we can include new terms related to the direction of edges
+#Such as the tendency for mutual connections
+dirB2<-ergm(dirB~edges+nodecov("size")+mutual(form="nabsdiff"),reference=~Poisson,response="weight")
+summary(dirB2)
+#We actually see that mutual edges are less likely than you'd expect by chance
+
+#And we can also include terms for transitive and cyclical triads
+dirB3<-ergm(dirB~edges+transitiveweights(twopath="min",combine="max",affect="min")+mutual(form="nabsdiff"),reference=~Poisson,response="weight")
+summary(dirB3)
+#Note the positive effect of the transitive weights term here. Try fitting the model again with the size effect back in and see what happens to this estimate. What does this tell you about the network?
+
+```
+
+***
+
+The other really cool things about ERGMs is that it is very easy to simulate networks with the model outputs. We can demonstrate this with any of the ERGMs we fitted earlier. Please feel free to change the model to look at the networks simulated by each one. The outputs are stored as network objects but these are easy to convert to adjacency matrices.
+
+```{r ergmsims}
+
+#Simulate networks
+sim_nets<-simulate(dirB3,nsim=10)
+
+#Plot networks
+par(mfrow=c(2,5))
+for(i in 1:10){
+  plot(sim_nets[[i]])
+}
+par(mfrow=c(1,1))
+
+#Convert to adjacency matrix (for the first simulated network only)
+sim_net1<-as.matrix.network(sim_nets[[1]],attrname="weight")
+
+sim_net1[1:10,1:10]
+
+```
+
+If there is time left in the session and you are interested then please feel free to try generating your own networks or using others from earlier in the session and get some more practice in fitting models or spend more time playing with simulating networks using ERGMs and seeing how they compare to the networks you started with.
+
+***
+***
+***
